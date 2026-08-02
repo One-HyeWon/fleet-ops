@@ -38,6 +38,33 @@
 - 기본 브랜치에서 바로 커밋하지 말고 브랜치 파서 작업.
 - 각 주차 작업 후 `docs/`에 스터디 글(설계·AI활용·비판·회고) 정리.
 
-## 현재 상태 (2026-07-24)
-- 아직 **레포 초기화 전**(git init 안 함), 코드 없음. `docs/`에 기획서·2주차 이슈만 있음.
-- **1주차(마이그레이션 아키텍처 케이스)는 별도로 완료**. 다음은 **2주차** = 백엔드 골격.
+### 브랜치
+`week{N}/{주제}` — 예: `week2/backend-skeleton`, `week4/3d-instancing`
+
+### 커밋 메시지 (Conventional Commits)
+```
+<type>(<scope>): <제목 — 명령형, 마침표 없음>
+
+<본문 — "무엇"보다 "왜". 트레이드오프가 있었으면 그걸 적는다>
+```
+- **type**: `feat` 기능 / `fix` 버그 / `docs` 문서 / `refactor` 동작 그대로 구조 개선 /
+  `perf` 성능 / `test` 테스트 / `chore` 설정·빌드
+- **scope**: `backend` / `frontend` / `infra` / 생략(문서·설정)
+- 제목은 한국어, 50자 이내.
+- **본문에 "왜"를 쓸 것.** 이 프로젝트는 스터디용이라 커밋 히스토리 자체가 사고 과정의 기록이 된다.
+  주간 이슈의 Deep Dive를 쓸 때 이 히스토리에서 근거를 긁어온다.
+
+### 커밋 쪼개는 기준
+- **한 커밋 = 한 가지 이유의 변경.** "이 커밋을 되돌리면 뭐가 사라지나"가 한 문장으로 답되면 OK.
+- 설정 변경 + 기능 구현이 섞이면 나눈다. 문서만 고친 건 항상 따로.
+- 리뷰어(=미래의 나)가 diff를 위에서 아래로 읽어 이해되면 잘 쪼갠 것.
+
+## 현재 상태 (2026-07-27)
+- 레포 초기화 완료. 원격: `github.com/One-HyeWon/fleet-ops` (public).
+- 진행 중: **2주차 백엔드 골격** (`week2/backend-skeleton` 브랜치)
+  - [x] 서비스 정의 → ERD 설계 (`docs/ERD.md`)
+  - [x] FastAPI + uv 세팅, `/health`, SQLite FK·WAL 설정
+  - [x] SQLModel 테이블 3개 (`app/models.py`)
+  - [ ] 시뮬레이터 (random walk) ← 다음
+  - [ ] WebSocket 브로드캐스트 / REST / 배치 저장 / docker-compose
+- 스터디 레포는 별도: `GC-Project-Space/ai-luddite` (코드 아님, Issue + 회고만)
