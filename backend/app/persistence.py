@@ -37,7 +37,7 @@ import time
 from sqlalchemy import insert, select
 from sqlmodel import Session
 
-from app.config import BATCH_INTERVAL_SEC
+from app.config import BATCH_INTERVAL_SEC, TELEMETRY_SAMPLE_EVERY_TICKS
 from app.db import engine
 from app.models import Robot, Telemetry, utcnow
 from app.state import fleet
@@ -45,8 +45,8 @@ from app.state import fleet
 log = logging.getLogger(__name__)
 
 # 버퍼가 이 이상 쌓이면 오래된 것부터 버립니다.
-# 5초치가 5만 행이므로 30만 행 ≈ 30초치. 그보다 밀렸다면 DB 가 회복 불가능하게
-# 느린 상황이고, 메모리를 지키는 쪽이 낫습니다.
+# 샘플링(1초마다) 기준 5초치가 5,000행이므로 30만 행 ≈ 5분치입니다.
+# 그보다 밀렸다면 DB 가 회복 불가능하게 느린 상황이고, 메모리를 지키는 쪽이 낫습니다.
 # ⚠️ "버린다"는 선택입니다. 결제 데이터였다면 절대 이러면 안 됩니다.
 #    텔레메트리는 최신값이 더 중요하고, 어차피 실시간 화면은 메모리에서 나옵니다.
 MAX_BUFFER_ROWS = 300_000
@@ -95,14 +95,27 @@ def sync_robots() -> None:
             log.info("robots %d행 시드", len(missing))
 
 
+_tick_count = 0
+
+
 def record() -> None:
-    """매 tick 호출 — 지금 fleet 상태를 버퍼에 dict 로 쌓는다.
+    """매 tick 호출되지만, 실제로 쌓는 건 TELEMETRY_SAMPLE_EVERY_TICKS 마다 한 번.
+
+    ⚠️ 여기가 **샘플링**입니다. 배치(버퍼링)와 다른 층의 결정이에요.
+       버퍼링은 "모아서 한 번에 쓴다"(데이터는 그대로),
+       샘플링은 "애초에 덜 만든다"(데이터를 버림).
+       매 tick 쌓으면 초당 1만 행이고, 그러면 어떤 쓰기 전략도 결국 밀립니다
+       (config.py 의 실측 기록 참고 — flush 44초, 143만 행 폐기).
 
     왜 Telemetry 객체가 아니라 dict 인가:
       executemany 가 dict 리스트를 받습니다. 그리고 사전 측정에서
       Telemetry(**row) 는 21.7µs/개, dict 는 0.16µs/개 였습니다(135배).
-      매 tick 1,000번씩 하는 일이라 여기서 객체를 만들면 그게 곧 병목입니다.
     """
+    global _tick_count
+    _tick_count += 1
+    if _tick_count % TELEMETRY_SAMPLE_EVERY_TICKS != 0:
+        return
+
     now = utcnow()
     _buffer.extend(
         {
