@@ -3,12 +3,13 @@
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from app.db import create_db_and_tables
 from app.persistence import flush_now, run_persister, stats, sync_robots
 from app.simulator import run_simulator
 from app.state import fleet, init_fleet
+from app.ws import manager
 
 
 @asynccontextmanager
@@ -65,7 +66,32 @@ def get_persistence_stats():
     rows_dropped 가 0 이 아니면 DB 쓰기가 생성 속도를 못 따라가는 중입니다.
     max_flush_ms 가 배치 주기(5,000ms)에 가까워지면 한계 신호.
     """
-    return stats
+    return {"persistence": stats, "websocket": manager.stats,
+            "clients": len(manager.active)}
+
+
+# ═══════════════════════════════════════════════════════════
+# WebSocket — 실시간
+# ═══════════════════════════════════════════════════════════
+@app.websocket("/ws/telemetry")
+async def ws_telemetry(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            # 💭 받을 것도 없는데 왜 receive_text() 로 기다리나?
+            #    서버→클라 단방향인데도 이 루프가 필요합니다.
+            #    (1) 이 함수가 끝나면 FastAPI 가 연결을 닫아버립니다.
+            #    (2) 클라이언트가 끊었다는 걸 알아채는 방법이 이것뿐입니다
+            #        — receive 가 WebSocketDisconnect 를 던져줍니다.
+            #    Week 03 에서 여기로 뷰포트 정보가 올라옵니다.
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+    except Exception:
+        # 정상적인 끊김이 아닌 경우에도 명단에서는 반드시 빼야 합니다.
+        # 안 그러면 죽은 소켓이 브로드캐스트마다 예외를 던집니다.
+        manager.disconnect(websocket)
+        raise
 
 
 # ── 참고: lifespan 패턴 설명 (구현은 위에 있음) ─────────────

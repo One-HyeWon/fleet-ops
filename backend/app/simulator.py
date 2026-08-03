@@ -30,6 +30,7 @@ from app.config import (  # noqa: F401
 )
 from app.persistence import record
 from app.state import RobotState, fleet, rng
+from app.ws import manager
 from app.models import RobotStatus, RobotType, utcnow  # noqa: F401
 
 # ⚠️ import 방향에 주의
@@ -39,6 +40,7 @@ from app.models import RobotStatus, RobotType, utcnow  # noqa: F401
 #     state.py        ← config 만
 #        ↑
 #     persistence.py  ← config + state + db        (버퍼에 쌓기만)
+#     ws.py           ← state 만                    (같은 층. 서로 모름)
 #        ↑
 #     simulator.py    ← 위의 것들                   (여기)
 #        ↑
@@ -195,7 +197,8 @@ async def run_simulator() -> None:
     n = 0
     while True:
         tick()
-        record()          # ← 이번 tick 상태를 배치 버퍼에 쌓기 (DB엔 안 씀)
+        record()                            # 배치 버퍼에 쌓기 (DB엔 안 씀)
+        await manager.broadcast_snapshot()  # 접속자에게 밀어넣기
         n += 1
         target = start + n * (TICK_MS / 1000)
         await asyncio.sleep(max(0, target - loop.time()))
