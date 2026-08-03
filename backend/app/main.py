@@ -2,10 +2,13 @@
 
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from sqlmodel import Session, select
 
-from app.db import create_db_and_tables
+from app.db import create_db_and_tables, get_session
+from app.models import RobotStatus, Telemetry
 from app.persistence import flush_now, run_persister, stats, sync_robots
 from app.simulator import run_simulator
 from app.state import fleet, init_fleet
@@ -93,6 +96,75 @@ async def ws_telemetry(websocket: WebSocket):
         manager.disconnect(websocket)
         raise
 
+
+# ═══════════════════════════════════════════════════════════
+# REST — 조회
+# ═══════════════════════════════════════════════════════════
+@app.get("/robots")
+def list_robots(
+    status: RobotStatus | None = None,
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+):
+    """현재 로봇 목록.
+
+    ⚠️ DB 가 아니라 **메모리(fleet)** 에서 읽습니다.
+       DB 의 robots 는 시작 시 한 번 넣은 뒤 갱신하지 않아서 위치가 낡았습니다.
+       "지금 어디 있나"의 진실은 메모리에 있어요(state.py 참고).
+       → 그래서 이 엔드포인트는 DB 세션이 필요 없습니다.
+
+    limit 기본 100: 1,000대를 통째로 주면 응답이 커지고, 애초에 이 API 는
+    실시간 화면용이 아닙니다(그건 WebSocket). 목록·검색용입니다.
+    """
+    robots = list(fleet.values())
+    if status is not None:
+        robots = [r for r in robots if r.status == status]
+    return {
+        "total": len(robots),
+        "limit": limit,
+        "offset": offset,
+        "items": robots[offset:offset + limit],
+    }
+
+
+@app.get("/robots/{robot_id}")
+def get_robot(robot_id: int):
+    robot = fleet.get(robot_id)
+    if robot is None:
+        raise HTTPException(status_code=404, detail=f"robot {robot_id} not found")
+    return robot
+
+
+@app.get("/robots/{robot_id}/telemetry")
+def get_robot_telemetry(
+    robot_id: int,
+    since: datetime | None = None,
+    limit: int = Query(500, ge=1, le=5000),
+    session: Session = Depends(get_session),
+):
+    """과거 궤적 — 이건 **DB** 에서 읽습니다.
+
+    실시간은 메모리, 과거는 DB. 이 경계가 이 프로젝트의 핵심 설계입니다.
+
+    ⚠️ 최근 5초는 아직 버퍼에 있어서 DB 에 없습니다(배치 주기).
+       "방금 것이 왜 없냐"는 질문이 나올 지점이고, 그게 배치 저장의
+       설계상 비용입니다. 필요하면 buffer 도 같이 훑도록 바꿀 수 있지만
+       그러면 이 API 가 메모리 상태에 의존하게 됩니다.
+
+    복합 인덱스 (robot_id, recorded_at) 가 이 쿼리를 위해 있습니다.
+    """
+    if robot_id not in fleet:
+        raise HTTPException(status_code=404, detail=f"robot {robot_id} not found")
+
+    query = select(Telemetry).where(Telemetry.robot_id == robot_id)
+    if since is not None:
+        query = query.where(Telemetry.recorded_at >= since)
+    # 최신순으로 limit 개를 뽑고 되돌립니다.
+    # 오래된 순으로 뽑으면 "가장 최근 500개"가 아니라 "가장 오래된 500개"가 됩니다.
+    rows = session.exec(
+        query.order_by(Telemetry.recorded_at.desc()).limit(limit)
+    ).all()
+    return {"robot_id": robot_id, "count": len(rows), "items": list(reversed(rows))}
 
 # ── 참고: lifespan 패턴 설명 (구현은 위에 있음) ─────────────
 # TODO(2주차) — 완료
