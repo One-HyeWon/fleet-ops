@@ -1,0 +1,49 @@
+# FleetOps — 로컬 개발용 구성
+#
+# 지금은 서비스가 api 하나뿐이라 "compose 를 왜 쓰나" 싶을 수 있습니다.
+# Week 05 에서 db(PostgreSQL) 가, Week 06 에서 web(Nginx) 가 붙습니다.
+# 그때 서비스 간 연결·기동 순서·네트워크를 다뤄야 하는데,
+# 하나일 때 골격을 잡아두면 그 변경이 diff 로 깔끔하게 남습니다.
+#
+#   실행:  docker compose up --build
+#   확인:  curl localhost:8000/health
+#   중지:  docker compose down          (볼륨은 남음 = DB 유지)
+#          docker compose down -v       (볼륨까지 삭제 = DB 초기화)
+
+services:
+  api:
+    build: ./backend
+    ports:
+      # 왼쪽이 호스트, 오른쪽이 컨테이너 안. 컨테이너 쪽은 8000 고정입니다.
+      # 호스트 포트만 바꿀 수 있게 한 이유: 다른 프로젝트가 8000 을 이미 쓰고 있으면
+      # "port is already allocated" 로 컨테이너가 아예 안 뜹니다(실제로 겪음).
+      #   API_PORT=8010 docker compose up
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      # ① 코드를 마운트 — 호스트에서 고치면 컨테이너 안에도 바로 반영됩니다.
+      #    이게 없으면 코드 한 줄 고칠 때마다 이미지를 다시 빌드해야 해요.
+      - ./backend/app:/app/app
+      - ./backend/scripts:/app/scripts
+      # ② DB 는 named volume 에.
+      #    ⚠️ 호스트 폴더(./backend/data)를 바인드하면 macOS 에서 아주 느립니다.
+      #       Docker Desktop 은 리눅스 VM 안에서 돌고, 호스트 파일시스템 접근은
+      #       가상화 계층을 거칩니다. SQLite 처럼 fsync 를 자주 하는 워크로드는
+      #       여기서 몇 배씩 느려져요. named volume 은 VM 안에 있어 그 비용이 없습니다.
+      - fleet_data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+    # 개발 중엔 hot-reload. 배포에선 이 줄을 빼야 합니다
+    # (reload 는 파일을 계속 감시해서 CPU 를 먹고, 워커 관리 방식도 다릅니다).
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      # Docker 가 "이 컨테이너 정상인가"를 주기적으로 물어보는 방법.
+      # Week 06 에서 Nginx 가 api 를 기다렸다 뜨게 할 때 이 값을 씁니다.
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  fleet_data:

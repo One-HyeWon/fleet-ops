@@ -28,18 +28,23 @@ from app.config import (  # noqa: F401
     TICK_MS,
     WAREHOUSE_SIZE,
 )
+from app.persistence import record
 from app.state import RobotState, fleet, rng
+from app.ws import manager
 from app.models import RobotStatus, RobotType, utcnow  # noqa: F401
 
 # ⚠️ import 방향에 주의
 #
-#     config.py     ← 아무것도 import 안 함        (맨 아래층)
+#     config.py       ← 아무것도 import 안 함        (맨 아래층)
 #        ↑
-#     state.py      ← config 만
+#     state.py        ← config 만
 #        ↑
-#     simulator.py  ← config + state              (여기)
+#     persistence.py  ← config + state + db        (버퍼에 쌓기만)
+#     ws.py           ← state 만                    (같은 층. 서로 모름)
 #        ↑
-#     main.py       ← 전부                        (맨 위층)
+#     simulator.py    ← 위의 것들                   (여기)
+#        ↑
+#     main.py         ← 전부                        (맨 위층)
 #
 # 화살표가 한 방향으로만 흘러야 합니다. state.py 가 여기서 뭔가를 import 하면
 # 서로를 기다리다 ImportError 가 납니다(순환 참조).
@@ -192,6 +197,8 @@ async def run_simulator() -> None:
     n = 0
     while True:
         tick()
+        record()                            # 배치 버퍼에 쌓기 (DB엔 안 씀)
+        await manager.broadcast_snapshot()  # 접속자에게 밀어넣기
         n += 1
         target = start + n * (TICK_MS / 1000)
         await asyncio.sleep(max(0, target - loop.time()))
