@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.db import create_db_and_tables
+from app.persistence import flush_now, run_persister, stats, sync_robots
 from app.simulator import run_simulator
 from app.state import fleet, init_fleet
 
@@ -15,16 +16,26 @@ async def lifespan(app: FastAPI):
     # ── 켜질 때 ──────────────────────────────
     create_db_and_tables()
     init_fleet()
-    task = asyncio.create_task(run_simulator())
+    sync_robots()       # ← telemetry FK 가 참조할 robots 행을 먼저 확보
+    tasks = [
+        asyncio.create_task(run_simulator()),
+        asyncio.create_task(run_persister()),   # 5초마다 배치 저장
+    ]
 
     yield                       # ← 서버가 운영되는 구간
 
     # ── 꺼질 때 ──────────────────────────────
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    # 루프를 세운 뒤에 남은 버퍼를 마저 저장합니다.
+    # 순서가 중요합니다 — 시뮬레이터를 먼저 안 세우면 저장하는 동안에도
+    # 버퍼가 계속 쌓여서 "마지막"이 영원히 안 옵니다.
+    await flush_now()
 
 app = FastAPI(title="FleetOps API", lifespan=lifespan)
 
@@ -46,7 +57,19 @@ def get_fleet():
         "sample": [fleet[i] for i in (1, 2, 3)],
     }
 
-# TODO(2주차)
+
+@app.get("/debug/persistence")
+def get_persistence_stats():
+    """배치 저장이 잘 따라가고 있는지 보는 창.
+
+    rows_dropped 가 0 이 아니면 DB 쓰기가 생성 속도를 못 따라가는 중입니다.
+    max_flush_ms 가 배치 주기(5,000ms)에 가까워지면 한계 신호.
+    """
+    return stats
+
+
+# ── 참고: lifespan 패턴 설명 (구현은 위에 있음) ─────────────
+# TODO(2주차) — 완료
 #   [ ] lifespan 등록 — 앱이 뜰 때 테이블 생성 + 시뮬레이터 루프 시작
 #   [ ] GET  /robots
 #   [ ] GET  /robots/{id}/telemetry
